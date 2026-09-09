@@ -53,7 +53,9 @@ mcl_scalar mcl_observer_get_confidence(mcl_observer *self)
 {
     if (self == NULL || self->ops == NULL || self->ops->get_confidence == NULL)
     {
-        return (mcl_scalar)1;
+        /* 无置信度接口时默认满置信度；定点下必须是满幅（≈1.0 pu），
+         * 裸整数 (mcl_scalar)1 会退化为 1 LSB（≈0），导致开环永不禁用。 */
+        return MCL_FROM_FLOAT(1.0f);
     }
 
     return self->ops->get_confidence(self->impl);

@@ -79,7 +79,7 @@ mcl 是一个 **自包含、可复用的电机控制库**，以 C 源码 / 静�
 - MTPA 与弱磁（FW）
 - Clark / Park 变换及逆变换、SVPWM 调制
 - 无传感器位置/速度观测器
-- 保护（过流 / 过压 / 欠压 / 过温 / 堵转 / 失步）
+- 保护（过流 / 过压 / 欠压 / 过温 / 堵转）
 - 校准（电流零漂、编码器对齐、相序检测、相电阻/电感测量）
 - 公共 API 与 HAL 抽象接口定义
 
@@ -173,7 +173,7 @@ hal / bsp                     宿主工程的外设薄封装与板级
 | `mcl_pid` | `mcl_pid_` | 通用 PID 控制器（电流/速度/位置环复用） | ✅ |
 | `mcl_mtpa_fw` | `mcl_mtpa_fw_` | MTPA 与弱磁控制（IPMSM 支持，float 中转保证三精度） | ✅ |
 | `mcl_bldc_comm` | `mcl_bldc_comm_` | 六步换相逻辑（hall 换相 / 无感 BEMF 积分换相） | ✅ |
-| `mcl_protection` | `mcl_protection_` | 过流/过压/欠压/过温/堵转/失步保护与故障处理 | ✅ |
+| `mcl_protection` | `mcl_protection_` | 过流/过压/欠压/过温/堵转保护与故障处理 | ✅ |
 | `mcl_calibration` | `mcl_calibration_` | 校准：电流零漂、编码器对齐、相电阻 R、相电感 L、霍尔相序检测、磁链 λ 测量 | ✅ |
 | `mcl_hal` | `mcl_hal_` | 库定义的 HAL 抽象接口（PWM/ADC/编码器/定时器），由宿主实现 | 接口定义 |
 
@@ -386,7 +386,6 @@ typedef enum
     MCL_FAULT_UNDERVOLTAGE,     /**< 欠压 */
     MCL_FAULT_OVERTEMP,         /**< 过温 */
     MCL_FAULT_STALL,            /**< 堵转 */
-    MCL_FAULT_SYNC_LOST,        /**< 失步 */
     MCL_FAULT_DRV,              /**< 门驱故障（nFAULT 引脚） */
 } mcl_fault;
 ```

@@ -20,11 +20,13 @@ extern "C" {
  */
 typedef struct
 {
-    mcl_scalar kp;                   /**< 比例系数 */
-    mcl_scalar ki;                   /**< 积分系数 */
-    mcl_scalar phase;                /**< 跟踪相位 rad */
-    mcl_scalar speed;                /**< 估计速度 rad/s */
-    mcl_scalar i_term;               /**< 积分项 */
+    mcl_scalar kp;                   /**< 相位锁定比例增益（VESC 式：单位 1/s，作用于相位积分，
+                                          加到速度项上；定点为 (电气速度 pu)/圈） */
+    mcl_scalar ki;                   /**< 速度积分增益（单位 1/s²；定点为 (电气速度 pu)/(圈·dt_pu)） */
+    mcl_scalar phase;                /**< 跟踪相位：float=rad，定点=归一化圈 [0,1) */
+    mcl_scalar speed;                /**< 估计速度：float=rad/s，定点=电气速度 pu(=ω/W_BASE)。
+                                          VESC 式下本字段即积分项，直接累加 ki·err·dt */
+    mcl_scalar last_phase;           /**< 上一拍输入相位（相位差分数度估计 + wind-up 限幅用） */
 } mcl_pll;
 
 /**
@@ -42,12 +44,16 @@ void mcl_pll_init(mcl_pll *self, mcl_scalar kp, mcl_scalar ki);
 void mcl_pll_reset(mcl_pll *self);
 
 /**
- * @brief PLL 单步更新
+ * @brief PLL 单步更新（VESC 式：kp 作用于相位积分，ki 作用于速度积分）
  * @param self      PLL 实例
- * @param phase     输入相位 rad（来自观测器 / 编码器）
- * @param dt        控制周期 s
- * @param phase_out 平滑相位 rad（输出）
- * @param speed_out 估计速度 rad/s（输出）
+ * @param phase     输入相位（来自观测器 / 编码器）：float=rad，定点=「圈」
+ * @param dt        控制周期：float=秒，定点=dt_pu(=dt/T_BASE)
+ * @param phase_out 平滑相位（输出，量纲同输入）
+ * @param speed_out 估计速度（输出）：float=rad/s，定点=电气速度 pu
+ *
+ * 算法（对齐 VESC foc_pll_run）：
+ *   phase += (speed + kp·err)·dt
+ *   speed += ki·err·dt
  */
 void mcl_pll_run(mcl_pll *self, mcl_scalar phase, mcl_scalar dt,
                  mcl_scalar *phase_out, mcl_scalar *speed_out);

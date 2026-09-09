@@ -44,6 +44,7 @@ int mcl_cal_current_offset(const mcl_hal_ops *hal, void *ctx,
     mcl_scalar sum_a = (mcl_scalar)0;
     mcl_scalar sum_b = (mcl_scalar)0;
     mcl_scalar sum_c = (mcl_scalar)0;
+    mcl_scalar inv_n;
 
     if (hal == NULL || hal->adc_read_phase == NULL || offset == NULL)
     {
@@ -54,6 +55,10 @@ int mcl_cal_current_offset(const mcl_hal_ops *hal, void *ctx,
         return MCL_ERR_PARAM;
     }
 
+    /* 增量平均：每个样本乘 1/n 再累加，结果即平均值。
+       避免「先累加 n 次再除」导致的累加溢出，也避免除以整数 n>1 的定点问题。 */
+    inv_n = MCL_FROM_FLOAT(1.0f / (float)samples);
+
     for (i = 0; i < samples; i++)
     {
         mcl_scalar ia;
@@ -63,18 +68,14 @@ int mcl_cal_current_offset(const mcl_hal_ops *hal, void *ctx,
         {
             return MCL_ERR_HAL;
         }
-        sum_a = MCL_ADD(sum_a, ia);
-        sum_b = MCL_ADD(sum_b, ib);
-        sum_c = MCL_ADD(sum_c, ic);
+        sum_a = MCL_ADD(sum_a, MCL_MUL(ia, inv_n));
+        sum_b = MCL_ADD(sum_b, MCL_MUL(ib, inv_n));
+        sum_c = MCL_ADD(sum_c, MCL_MUL(ic, inv_n));
     }
 
-    /* 平均：除以样本数（用 MCL_DIV，定点正确；样本数可能 >1 需保证分母 <1）
-       TODO 定点：样本数 >1 时 1/samples 是 <1 的倒数，此处用 MCL_DIV 需样本数在 [-1,1)，
-       实际样本数为整数 >1 会溢出。故此处仍用物理语义除法（float）；定点下由宿主在
-       offset 语义层处理（样本数归一化）。 */
-    offset[0] = sum_a / (mcl_scalar)samples;
-    offset[1] = sum_b / (mcl_scalar)samples;
-    offset[2] = sum_c / (mcl_scalar)samples;
+    offset[0] = sum_a;
+    offset[1] = sum_b;
+    offset[2] = sum_c;
     return MCL_OK;
 }
 
@@ -137,7 +138,7 @@ int mcl_cal_resistance(const mcl_hal_ops *hal, void *ctx,
     mcl_scalar sum_v = (mcl_scalar)0;
     mcl_scalar vbus = (mcl_scalar)0;
     mcl_scalar d = (mcl_scalar)0;
-    uint32_t n = 0u;
+    mcl_scalar inv_n = MCL_FROM_FLOAT(0.01f);   /* 1/100，增量平均用 */
     int i;
 
     if (hal == NULL || hal->pwm_set_duty == NULL ||
@@ -182,29 +183,22 @@ int mcl_cal_resistance(const mcl_hal_ops *hal, void *ctx,
             hal->pwm_set_duty(ctx, (mcl_scalar)0, (mcl_scalar)0, (mcl_scalar)0);
             return MCL_ERR_HAL;
         }
-        /* 稳态 α 轴电流 = ia（锁 d 轴，β 分量≈0），电压 = d · vbus */
-        sum_i = MCL_ADD(sum_i, ia);
-        sum_v = MCL_ADD(sum_v, MCL_MUL(d, vbus));
-        n++;
+        /* 稳态 α 轴电流 = ia（锁 d 轴，β 分量≈0），电压 = d · vbus。
+           增量平均：乘 1/100 累加，避免累加溢出与除以整数 */
+        sum_i = MCL_ADD(sum_i, MCL_MUL(ia, inv_n));
+        sum_v = MCL_ADD(sum_v, MCL_MUL(MCL_MUL(d, vbus), inv_n));
         cal_delay_us(hal, ctx, 200u);
     }
 
     hal->pwm_set_duty(ctx, (mcl_scalar)0, (mcl_scalar)0, (mcl_scalar)0);
 
-    if (n == 0u)
+    /* R = 平均电压 / 平均电流（sum 已是增量平均后的均值） */
     {
-        return MCL_ERR_HAL;
-    }
-
-    /* R = 平均电压 / 平均电流（TODO 定点：除以样本数 n 需归一化，当前为 float 语义） */
-    {
-        mcl_scalar i_avg = sum_i / (mcl_scalar)n;
-        mcl_scalar v_avg = sum_v / (mcl_scalar)n;
-        if (MCL_ABS(i_avg) < MCL_FROM_FLOAT(1.0e-6f))
+        if (MCL_ABS(sum_i) < MCL_FROM_FLOAT(1.0e-6f))
         {
             return MCL_ERR_HAL;   /* 电流近乎为 0，测量无效 */
         }
-        *resistance = MCL_DIV(v_avg, i_avg);
+        *resistance = MCL_DIV(sum_v, sum_i);
     }
     return MCL_OK;
 }

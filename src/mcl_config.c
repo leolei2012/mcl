@@ -65,9 +65,16 @@ void mcl_config_default(mcl_config *cfg)
     cfg->feedback.encoder_offset = (mcl_scalar)0;
     cfg->feedback.encoder_cpr = 4096u;
 
-    /* PLL */
-    cfg->pll_kp = MCL_FROM_FLOAT(200.0f);
-    cfg->pll_ki = MCL_FROM_FLOAT(40000.0f);
+    /* PLL（VESC 式：kp 作用于相位积分、ki 作用于速度积分）
+       float 用物理值（VESC 参考 kp=2000 1/s、ki=30000 1/s²）；
+       定点用 per-unit 默认（归一化到 <1，见 mcl_fixed_point.md §9.2）。 */
+#if defined(MCL_USE_Q15) || defined(MCL_USE_Q31)
+    cfg->pll_kp = MCL_FROM_FLOAT(0.3f);
+    cfg->pll_ki = MCL_FROM_FLOAT(0.01f);
+#else
+    cfg->pll_kp = MCL_FROM_FLOAT(2000.0f);
+    cfg->pll_ki = MCL_FROM_FLOAT(30000.0f);
+#endif
 
     /* 无感自动开环启动（VESC 式） */
     cfg->openloop_rpm = MCL_FROM_FLOAT(200.0f);
@@ -80,9 +87,9 @@ void mcl_config_default(mcl_config *cfg)
     cfg->openloop_max_q = MCL_FROM_FLOAT(-1.0f);
     cfg->openloop_drag_q = MCL_FROM_FLOAT(1.0f);
 #if defined(MCL_USE_Q15) || defined(MCL_USE_Q31)
-    cfg->openloop_seed_angle = MCL_FROM_FLOAT(0.25f);       /* 90°/360° */
+    cfg->openloop_seed_angle = MCL_FROM_FLOAT(0.125f);      /* 45°/360°（VESC M_PI/4） */
 #else
-    cfg->openloop_seed_angle = MCL_FROM_FLOAT(1.5707963f);  /* π/2 */
+    cfg->openloop_seed_angle = MCL_FROM_FLOAT(0.78539816f); /* π/4（45°） */
 #endif
 
     /* 保护阈值 */

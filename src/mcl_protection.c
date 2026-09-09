@@ -79,20 +79,23 @@ mcl_scalar mcl_protection_derate(mcl_protection *self, mcl_scalar temp)
 {
     mcl_scalar range;
 
+    /* 「系数 1.0 = 不降额」必须用 MCL_FROM_FLOAT(1.0f) 表达满幅：
+     * 裸整数 (mcl_scalar)1 在 Q15/Q31 下是 1 LSB（≈0.00003 / ≈4.7e-7），
+     * 会被误当成「几乎不降额到 0」，导致电流限幅直接失效。 */
     if (self == NULL)
     {
-        return (mcl_scalar)1;
+        return MCL_FROM_FLOAT(1.0f);
     }
 
     /* 过温保护关闭则不降额 */
     if (!(self->limits.enabled & MCL_PROTECT_OVERTEMP))
     {
-        return (mcl_scalar)1;
+        return MCL_FROM_FLOAT(1.0f);
     }
 
     if (temp <= self->limits.temp_derate_start)
     {
-        return (mcl_scalar)1;
+        return MCL_FROM_FLOAT(1.0f);
     }
     if (temp >= self->limits.overtemp)
     {

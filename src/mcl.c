@@ -18,6 +18,23 @@
 /* 角度归一到 [0, 整圈)：float 用 2π；定点用 1.0（归一化角）。
    仅当 observer（自动开环）或 openloop（手动开环）任一启用时才需要 */
 #if !defined(MCL_DISABLE_OBSERVER) || !defined(MCL_DISABLE_OPENLOOP)
+
+/* 每控制周期的「相位增量」换算：speed(电气速度) × dt → 相位增量。
+ * - float：phase/speed 都是物理弧度/rad/s，dt 物理秒，speed×dt 已是弧度，系数 1。
+ * - 定点：phase 是「归一化圈」(1.0=2π)，speed 是电气速度 pu(ω/W_BASE)，dt 是时间 pu
+ *   (dt·W_BASE)。speed_pu×dt_pu = ω·dt = 弧度，需再 ×1/(2π) 才是「圈」。
+ *   此前的定点实现漏乘 1/(2π)，导致开环拖动的相位斜率偏 ~2π 倍
+ *   （VF 目标 100rpm 实测 ~630rpm，自动开环无法切换到闭环）。
+ */
+static mcl_scalar mcl_speed_to_phase_incr(mcl_scalar speed, mcl_scalar dt)
+{
+#if defined(MCL_USE_Q15) || defined(MCL_USE_Q31)
+    return MCL_MUL(MCL_MUL(speed, dt), MCL_FROM_FLOAT(1.0f / 6.28318530718f));
+#else
+    return MCL_MUL(speed, dt);
+#endif
+}
+
 static mcl_scalar mcl_wrap_full_turn(mcl_scalar x)
 {
 #if defined(MCL_USE_Q15) || defined(MCL_USE_Q31)
@@ -56,7 +73,13 @@ static mcl_scalar mcl_wrap_full_turn(mcl_scalar x)
 static void mcl_openloop_auto(mcl *self, mcl_scalar *phase, mcl_scalar *speed)
 {
     const mcl_scalar dt = self->dt;
-    const mcl_scalar pp = (mcl_scalar)self->cfg.pole_pairs;
+#if defined(MCL_USE_Q15) || defined(MCL_USE_Q31)
+    /* 定点：rpm_pu == 电气速度_pu，rpm↔rad/s 换算省略（见 mcl_fixed_point.md）。
+       rpm_pu 到电气速度_pu 系数 = RAD_PER_S_PER_RPM × pp = 1（在各自基值下） */
+    const mcl_scalar rpm_to_espeed = MCL_FROM_FLOAT(1.0f);
+#else
+    const mcl_scalar rpm_to_espeed = MCL_FROM_FLOAT(MCL_RAD_PER_S_PER_RPM * (float)self->cfg.pole_pairs);
+#endif
     const mcl_scalar t_lock = self->cfg.openloop_time_lock;
     const mcl_scalar t_ramp = self->cfg.openloop_time_ramp;
     const mcl_scalar t_const = self->cfg.openloop_time;
@@ -74,12 +97,12 @@ static void mcl_openloop_auto(mcl *self, mcl_scalar *phase, mcl_scalar *speed)
        TODO：VESC 按 |iq| 自适应（电流越大转速越高，I/F），依赖 openloop_rpm_low /
        openloop_boost_q / openloop_max_q；mcl 当前简化为固定 openloop_rpm，后续恢复。 */
     ol_rpm_max = self->cfg.openloop_rpm;
-    ol_speed_max = MCL_MUL(MCL_MUL(ol_rpm_max, MCL_FROM_FLOAT(MCL_RAD_PER_S_PER_RPM)), pp);
+    ol_speed_max = MCL_MUL(ol_rpm_max, rpm_to_espeed);
 
     /* 3. 拖动方向：速度/位置环用 speed_ref 符号，电流环用 iq_ref 符号 */
     dir = (self->ctrl_mode == MCL_CTRL_SPEED || self->ctrl_mode == MCL_CTRL_POSITION)
         ? self->speed_ref_rpm : self->iq_ref;
-    sign = (dir >= (mcl_scalar)0) ? (mcl_scalar)1 : (mcl_scalar)-1;
+    sign = (dir >= (mcl_scalar)0) ? MCL_FROM_FLOAT(1.0f) : MCL_FROM_FLOAT(-1.0f);
 
     /* 4. 迟滞进入：估计速度低于开环上限则向 hyst 饱和累加，否则递减 */
     if (MCL_ABS(*speed) < ol_speed_max)
@@ -130,11 +153,10 @@ static void mcl_openloop_auto(mcl *self, mcl_scalar *phase, mcl_scalar *speed)
             }
         }
 
-        self->ol_speed = MCL_MUL(MCL_MUL(MCL_MUL(ol_rpm,
-                                   MCL_FROM_FLOAT(MCL_RAD_PER_S_PER_RPM)), pp), sign);
+        self->ol_speed = MCL_MUL(MCL_MUL(ol_rpm, rpm_to_espeed), sign);
 
         /* 锁定阶段相位固定；拖动阶段相位积分 */
-        self->ol_phase = mcl_wrap_full_turn(MCL_ADD(self->ol_phase, MCL_MUL(self->ol_speed, dt)));
+        self->ol_phase = mcl_wrap_full_turn(MCL_ADD(self->ol_phase, mcl_speed_to_phase_incr(self->ol_speed, dt)));
 
         *phase = self->ol_phase;
         *speed = self->ol_speed;
@@ -193,8 +215,12 @@ static void mcl_control_tick_foc(mcl *self)
     if (self->hal->adc_read_phase != NULL &&
         self->hal->adc_read_phase(self->hal_ctx, &ia, &ib, &ic) != MCL_OK)
     {
-        self->state = MCL_STATE_FAULT;
-        self->fault = MCL_FAULT_SYNC_LOST;
+        /* ADC 采样失败：关断 PWM 安全停机，不伪造故障码。
+           具体故障原因由宿主在 HAL 出错时自行 mcl_fault_assert 上报（如 MCL_FAULT_DRV）。 */
+        if (self->hal->pwm_set_duty != NULL)
+        {
+            self->hal->pwm_set_duty(self->hal_ctx, (mcl_scalar)0, (mcl_scalar)0, (mcl_scalar)0);
+        }
         return;
     }
     ia = MCL_SUB(ia, self->cfg.current_offset[0]);
@@ -264,7 +290,7 @@ static void mcl_control_tick_foc(mcl *self)
     {
         /* 旋转矢量：相位按 openloop_speed 积分斜坡前进 */
         self->openloop_angle = mcl_wrap_full_turn(
-            MCL_ADD(self->openloop_angle, MCL_MUL(self->openloop_speed, self->dt)));
+            MCL_ADD(self->openloop_angle, mcl_speed_to_phase_incr(self->openloop_speed, self->dt)));
         phase = self->openloop_angle;
         speed = self->openloop_speed;
     }
@@ -321,8 +347,8 @@ static void mcl_control_tick_foc(mcl *self)
         self->iq_ref = iq_ref;
     }
 
-    /* 温度降额：限制 iq 幅值 */
-    if (derate < (mcl_scalar)1)
+    /* 温度降额：限制 iq 幅值（derate 满幅 = 不降额） */
+    if (derate < MCL_FROM_FLOAT(1.0f))
     {
         mcl_scalar iq_limit = MCL_MUL(self->cfg.rated_current, derate);
         if (iq_ref > iq_limit) { iq_ref = iq_limit; }
@@ -486,11 +512,11 @@ void mcl_init(mcl *self, const mcl_config *cfg,
         return;
     }
 
-    /* 配置校验：非法参数直接拒绝初始化 */
+    /* 配置校验：非法参数直接拒绝初始化，不进 FAULT（参数错误 ≠ 运行时故障） */
     if (mcl_config_validate(cfg) != MCL_OK)
     {
-        self->state = MCL_STATE_FAULT;
-        self->fault = MCL_FAULT_SYNC_LOST;
+        self->state = MCL_STATE_IDLE;
+        self->fault = MCL_FAULT_NONE;
         return;
     }
 
@@ -710,11 +736,12 @@ int mcl_set_torque(mcl *self, mcl_scalar torque_nm)
         return MCL_ERR_PARAM;
     }
 
-    /* iq = T / (1.5 · p · λ)；kt = 1.5·p·λ。
-       定点提示：1.5 与 kt 可能 >1，需转矩 per-unit 归一化（转矩基值 = 1.5·p·λ_BASE·I_BASE） */
-    kt = MCL_MUL(MCL_MUL((mcl_scalar)1.5f, (mcl_scalar)self->cfg.pole_pairs), self->cfg.bemf_const);
+    /* iq = T / (1.5 · p · λ) = (T / λ) · (2 / (3p))。
+       把 1.5=3/2 改写为乘法倒数 2/(3p)（≤ 2/3 <1），避免 1.5 在 Q15/Q31 下溢出。
+       定点提示：T 与 λ 仍需按转矩/磁链 per-unit 基值归一化（见 mcl_fixed_point.md）。 */
+    kt = MCL_FROM_FLOAT(2.0f / (3.0f * (float)self->cfg.pole_pairs));
     self->ctrl_mode = MCL_CTRL_CURRENT;
-    self->iq_ref = MCL_DIV(torque_nm, kt);
+    self->iq_ref = MCL_DIV(MCL_DIV(torque_nm, self->cfg.bemf_const), kt);
     return MCL_OK;
 }
 
@@ -729,15 +756,19 @@ int mcl_set_openloop_vf(mcl *self, mcl_scalar voltage, mcl_scalar speed_rpm)
         return MCL_ERR_PARAM;
     }
 
-    /* 电压幅值限幅到 [-1, 1]（标幺，1.0 = 满母线） */
-    if (voltage > (mcl_scalar)1) { voltage = (mcl_scalar)1; }
-    if (voltage < (mcl_scalar)-1) { voltage = (mcl_scalar)-1; }
+    /* 电压幅值限幅到 [-1, 1]（标幺，1.0 = 满母线；定点用满幅表示） */
+    if (voltage > MCL_FROM_FLOAT(1.0f)) { voltage = MCL_FROM_FLOAT(1.0f); }
+    if (voltage < MCL_FROM_FLOAT(-1.0f)) { voltage = MCL_FROM_FLOAT(-1.0f); }
 
     self->ctrl_mode = MCL_CTRL_OPENLOOP_VF;
     self->openloop_mag = voltage;
-    self->openloop_speed = MCL_MUL(
-        MCL_MUL(speed_rpm, MCL_FROM_FLOAT(MCL_RAD_PER_S_PER_RPM)),
-        (mcl_scalar)self->cfg.pole_pairs);
+#if defined(MCL_USE_Q15) || defined(MCL_USE_Q31)
+    /* 定点：rpm_pu == 电气速度_pu（见 mcl_fixed_point.md），直接存，不做 rpm↔rad/s 换算。 */
+    self->openloop_speed = speed_rpm;
+#else
+    self->openloop_speed = MCL_FROM_FLOAT(MCL_RAD_PER_S_PER_RPM * (float)self->cfg.pole_pairs);
+    self->openloop_speed = MCL_MUL(speed_rpm, self->openloop_speed);
+#endif
     return MCL_OK;
 }
 
@@ -754,9 +785,13 @@ int mcl_set_openloop_if(mcl *self, mcl_scalar current, mcl_scalar speed_rpm)
 
     self->ctrl_mode = MCL_CTRL_OPENLOOP_IF;
     self->openloop_mag = current;
-    self->openloop_speed = MCL_MUL(
-        MCL_MUL(speed_rpm, MCL_FROM_FLOAT(MCL_RAD_PER_S_PER_RPM)),
-        (mcl_scalar)self->cfg.pole_pairs);
+#if defined(MCL_USE_Q15) || defined(MCL_USE_Q31)
+    /* 定点：rpm_pu == 电气速度_pu，直接存。 */
+    self->openloop_speed = speed_rpm;
+#else
+    self->openloop_speed = MCL_FROM_FLOAT(MCL_RAD_PER_S_PER_RPM * (float)self->cfg.pole_pairs);
+    self->openloop_speed = MCL_MUL(speed_rpm, self->openloop_speed);
+#endif
     return MCL_OK;
 }
 
@@ -978,3 +1013,4 @@ int mcl_calibrate_inductance(mcl *self, mcl_scalar *inductance)
 }
 
 #endif /* MCL_DISABLE_CALIBRATION */
+

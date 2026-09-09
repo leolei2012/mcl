@@ -1,0 +1,22 @@
+# 编译产物
+*.exe
+*.o
+*.obj
+*.a
+*.so
+*.dll
+
+# 仿真输出
+tests/sim_output.html
+
+# 临时/调试文件
+*_tmp.c
+*_dbg*
+_d*
+_iso*
+_ol_tmp*
+
+# 编辑器
+.vscode/
+.idea/
+*.swp

@@ -70,7 +70,7 @@ static void ortega_update(void *impl, mcl_scalar v_alpha, mcl_scalar v_beta,
         return;
     }
 
-    gamma_half = MCL_MUL(self->params.gain, (mcl_scalar)0.5f);
+    gamma_half = MCL_MUL(self->params.gain, MCL_FROM_FLOAT(0.5f));
     L_ia = MCL_MUL(L, i_alpha);
     L_ib = MCL_MUL(L, i_beta);
 
@@ -100,6 +100,19 @@ static void ortega_update(void *impl, mcl_scalar v_alpha, mcl_scalar v_beta,
     lambda_beta = MCL_SUB(self->x2, L_ib);
     self->lambda_est = mcl_math_sqrt(MCL_ADD(MCL_MUL(lambda_alpha, lambda_alpha),
                                               MCL_MUL(lambda_beta, lambda_beta)));
+
+    /* 防磁链幅值崩溃（对齐 VESC foc_math.c：mag < λ·0.5 时 ×1.1 拉回）。
+       纯积分会让定子磁链幅值漂移到接近 0，使 atan2 角度噪声极大、极易失步；
+       幅值过低时按 1.1 倍（= x + 0.1x，0.1<1 定点可表达）拉回，抑制漂移。 */
+    {
+        mcl_scalar mag_psi = mcl_math_sqrt(MCL_ADD(MCL_MUL(self->x1, self->x1),
+                                                   MCL_MUL(self->x2, self->x2)));
+        if (mag_psi < MCL_MUL(lambda, MCL_FROM_FLOAT(0.5f)))
+        {
+            self->x1 = MCL_ADD(self->x1, MCL_MUL(self->x1, MCL_FROM_FLOAT(0.1f)));
+            self->x2 = MCL_ADD(self->x2, MCL_MUL(self->x2, MCL_FROM_FLOAT(0.1f)));
+        }
+    }
 
     self->i_alpha_last = i_alpha;
     self->i_beta_last = i_beta;

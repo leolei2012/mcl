@@ -99,9 +99,9 @@ int main(void)
     op.resistance = 1.0f;
     op.inductance = 0.001f;
     op.flux = 0.02f;        /* 磁链 ψ_f */
-    op.gain = 5.0f;        /* > ω·λ = 100×0.02 = 2.0 */
-    op.lpf = 200.0f;       /* 反电动势低通（时间常数 5ms），配合相位补偿 */
-    op.boundary = 0.05f;
+    op.gain = 0.85f;        /* AN1078 SMCGAIN，无量纲 */
+    op.lpf = 100.0f;        /* 最低电气转速 rad/s（反电动势滤波系数下限） */
+    op.boundary = 1.0f;     /* 滑模边界层电流误差 A */
 
     mcl_config_default(&cfg);
     cfg.current_loop_freq_hz = 10000;

@@ -143,25 +143,90 @@ mcl_scalar mcl_math_sqrt(mcl_scalar x)
 
 #else
 
-/* ============================ Q15/Q31：基础实现（转 float，TODO 优化纯定点） ============================ */
+/* ============================ Q15/Q31：纯定点查表 sin/cos ============================ */
+
+/* 1/4 周期（90°）正弦表，Q 格式（mcl_scalar）。首次调用用 float 填充一次，
+   之后按归一化角度纯整数查表 + Q 格式线性插值，不再调用 sinf/cosf。 */
+#define MCL_MATH_TABLE_BITS  8
+#define MCL_MATH_TABLE_SIZE  (1 << MCL_MATH_TABLE_BITS)
+
+static mcl_scalar mcl_q_sin_table[MCL_MATH_TABLE_SIZE + 1];
+static bool      mcl_q_table_ready = false;
+
+/* 首次调用：用标准 sinf 填充 1/4 周期表（Q 格式） */
+static void mcl_q_table_init(void)
+{
+    int i;
+    for (i = 0; i <= MCL_MATH_TABLE_SIZE; i++)
+    {
+        float a = MCL_PI_2 * (float)i / (float)MCL_MATH_TABLE_SIZE;   /* 0 ~ π/2 */
+        mcl_q_sin_table[i] = MCL_FROM_FLOAT(sinf(a));
+    }
+    mcl_q_table_ready = true;
+}
+
+/* 归一化角度 x ∈ [0,1) → sin(x·2π)。
+   x 是归一化角度（1.0 = 2π）。索引用 float 算（int↔float 廉价），
+   表值与插值用 Q 格式定点（避免 sinf 开销）。 */
+static mcl_scalar mcl_q_sin(mcl_scalar x)
+{
+    float fx = MCL_TO_FLOAT(x);
+    float sign = 1.0f;
+    int idx;
+    float frac;
+    mcl_scalar v0, v1;
+
+    /* wrap 到 [0,1) */
+    while (fx >= 1.0f) { fx -= 1.0f; }
+    while (fx < 0.0f) { fx += 1.0f; }
+
+    /* 折叠到 [0, 0.25)（1/4 圈 = 90°） */
+    if (fx >= 0.5f) { fx -= 0.5f; sign = -sign; }
+    if (fx >= 0.25f) { fx = 0.5f - fx; }
+
+    /* 索引：fx ∈ [0, 0.25] → idx ∈ [0, 256] */
+    fx = fx * 4.0f * (float)MCL_MATH_TABLE_SIZE;
+    idx = (int)fx;
+    if (idx >= MCL_MATH_TABLE_SIZE) { idx = MCL_MATH_TABLE_SIZE - 1; }
+    frac = fx - (float)idx;
+
+    v0 = mcl_q_sin_table[idx];
+    v1 = mcl_q_sin_table[idx + 1];
+
+    /* 线性插值（Q 格式 + 定点运算） */
+    {
+        mcl_scalar f = MCL_FROM_FLOAT(frac);
+        mcl_scalar r = MCL_ADD(v0, MCL_MUL(MCL_SUB(v1, v0), f));
+        return (sign < 0.0f) ? MCL_NEG(r) : r;
+    }
+}
 
 mcl_scalar mcl_math_sin(mcl_scalar x)
 {
-    float rad = MCL_TO_FLOAT(x) * MCL_TWO_PI;
-    return MCL_FROM_FLOAT(sinf(rad));
+    if (!mcl_q_table_ready) { mcl_q_table_init(); }
+    return mcl_q_sin(x);
 }
 
 mcl_scalar mcl_math_cos(mcl_scalar x)
 {
-    float rad = MCL_TO_FLOAT(x) * MCL_TWO_PI;
-    return MCL_FROM_FLOAT(cosf(rad));
+    if (!mcl_q_table_ready) { mcl_q_table_init(); }
+    /* cos(x) = sin(x + 0.25)（归一化角度 +90°）。
+       用 float 域偏移并 wrap，避免 Q 格式 MCL_ADD 在 x>0.75 时饱和。 */
+    {
+        float fx = MCL_TO_FLOAT(x) + 0.25f;
+        while (fx >= 1.0f) { fx -= 1.0f; }
+        return mcl_q_sin(MCL_FROM_FLOAT(fx));
+    }
 }
 
 void mcl_math_sincos(mcl_scalar x, mcl_scalar *sin, mcl_scalar *cos)
 {
-    float rad = MCL_TO_FLOAT(x) * MCL_TWO_PI;
-    *sin = MCL_FROM_FLOAT(sinf(rad));
-    *cos = MCL_FROM_FLOAT(cosf(rad));
+    float fx;
+    if (!mcl_q_table_ready) { mcl_q_table_init(); }
+    *sin = mcl_q_sin(x);
+    fx = MCL_TO_FLOAT(x) + 0.25f;
+    while (fx >= 1.0f) { fx -= 1.0f; }
+    *cos = mcl_q_sin(MCL_FROM_FLOAT(fx));
 }
 
 mcl_scalar mcl_math_atan2(mcl_scalar y, mcl_scalar x)

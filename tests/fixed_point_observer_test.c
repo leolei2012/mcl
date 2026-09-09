@@ -13,7 +13,8 @@
  *   L_BASE = V_BASE/(W_BASE·I_BASE) = 0.002 H
  *   T_BASE = 1/W_BASE = 0.002 s
  *
- * SMO 参数归一化：gain_pu=gain/V_BASE、lpf_pu=lpf/W_BASE、boundary_pu=boundary/I_BASE。
+ * SMO 参数（AN1078 语义）：gain=Kslide=0.85（无量纲）、boundary=MaxSMCError=0.005
+ * （电流误差，已归一化）、lpf=最低电气转速（rad/s 或 ω_pu，反电动势滤波系数下限）。
  */
 
 #include "mcl.h"
@@ -136,9 +137,9 @@ int main(void)
         op.resistance = R_pu;
         op.inductance = L_pu;
         op.flux = lam_pu;
-        op.gain = MCL_FROM_FLOAT(5.0f / V_BASE);          /* 0.5，> ω_pu·λ_pu = 0.2 */
-        op.lpf = MCL_FROM_FLOAT(200.0f / W_BASE);         /* 0.4 */
-        op.boundary = MCL_FROM_FLOAT(0.05f / I_BASE);     /* 0.005 */
+        op.gain = MCL_FROM_FLOAT(0.85f);              /* AN1078 SMCGAIN，无量纲 */
+        op.lpf = MCL_FROM_FLOAT(100.0f / W_BASE);     /* 最低电气速度 100 rad/s（=运行点，ω_pu=0.2） */
+        op.boundary = MCL_FROM_FLOAT(0.1f);           /* 滑模边界层（电流误差，归一化） */
         run_one(&mcl_observer_smo_ops, &obs, &op, R_pu, L_pu, lam_pu,
                 (mcl_scalar)0, (mcl_scalar)0, dt_pu, &m_smo, &x_smo);
         printf("  SMO    平均 %.4f°  最大 %.2f°\n", m_smo * 360.0f, x_smo * 360.0f);

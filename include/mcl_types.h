@@ -260,8 +260,7 @@ typedef enum
     MCL_FAULT_UNDERVOLTAGE,     /**< 欠压 */
     MCL_FAULT_OVERTEMP,         /**< 过温 */
     MCL_FAULT_STALL,            /**< 堵转 */
-    MCL_FAULT_SYNC_LOST,        /**< 失步 */
-    MCL_FAULT_DRV,              /**< 门驱故障（nFAULT 引脚） */
+    MCL_FAULT_DRV,              /**< 门驱故障（nFAULT 引脚，宿主上报） */
 } mcl_fault;
 
 /* ============================ 反馈类型 ============================ */

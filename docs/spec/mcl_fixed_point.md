@@ -198,8 +198,8 @@ float speed_rpm = MCL_TO_FLOAT(t.speed_rpm);   /* 若 speed 归一化则再乘�
 | FOC 速度环闭环 + 机械方程 | ✅ | ✅（电机 float 物理 + HAL 边界归一化，三精度 ~500 rpm <1% 误差） |
 | MTPA / 弱磁 | ✅ | ✅（float 中转，避开 8/4/√3 常数溢出，三精度一致；IPMSM 支持） |
 | dt 归一化 | — | ✅（`cfg.time_base`，dt_pu = dt/T_BASE） |
-| 速度环 rpm↔rad/s 换算 | ✅ | ⚠️ 归一化路径（`#if` 分离，speed/speed_ref 在边界归一化） |
-| 时间阈值（stall_time 等）归一化 | — | ⚠️ 需随 time_base 归一化（见 §7 坑） |
+| 速度环 rpm↔rad/s 换算 | ✅ | ✅（归一化速度直接比较，rpm_pu == 电气速度_pu；`#if` 分离 float 物理路径） |
+| 时间阈值（stall_time 等）归一化 | — | ✅（一致性约定，见 §9.1；宿主需按 time_base 归一化配置阈值） |
 
 > 定点数学层当前是「基础实现」（转 float 计算再转回），后续可优化为纯定点查表；
 > 详见 tests/fixed_point_test.c、fixed_point_observer_test.c、fixed_point_foc_test.c。
@@ -237,6 +237,49 @@ dt 归一化后（`dt_pu = dt/T_BASE`，典型 dt_pu≈0.01 而非 0.0001），
 
 > 规避：物理量仍用 float 存于配置时，在 `mcl_init` 里统一乘 time_base 归一化；
 > 或约定「配置里所有时间字段在定点模式下已是 per-unit 时间」。
+
+### 9.2 角度「圈」与速度「电气速度 pu」的换算（1/(2π)）
+
+定点下角度用「归一化圈」（`1.0 = 2π rad`，§4），速度用「电气速度 pu」（`ω/W_BASE`）。
+两者相差 `1/(2π)` 因子，凡「速度积分成相位」的路径必须乘 `1/(2π)`：
+
+```text
+圈增量 = (ω · dt) / (2π)
+       = speed_pu · dt_pu · (1 / 2π)      （speed_pu = ω/W_BASE，dt_pu = dt·W_BASE）
+```
+
+- **开环相位积分**（`mcl.c` 的 `mcl_speed_to_phase_incr`）与 **PLL 相位积分**（`mcl_pll.c`）
+  均统一用此换算：定点乘 `MCL_FROM_FLOAT(1/2π)`，float 恒等（`rad/s × s = rad`）。
+- **PLL speed 输出单位**统一为「电气速度 pu」（`=ω/W_BASE`），与速度环的
+  `speed_ref_rpm`（rpm_pu == 电气速度_pu）和开环阈值 `ol_speed_max` 一致，可直接比较。
+- **PLL 结构为 VESC 式**（`mcl_pll.c mcl_pll_run`）：`phase += (speed + kp·err)·dt`、
+  `speed += ki·err·dt`。kp 是相位锁定比例增益（作用于相位积分，加到速度项上），
+  ki 是速度积分增益；两者都不直接产出速度，避免「speed=kp·err」在定点下 kp>1 时饱和。
+  kp 单位=(电气速度 pu)/圈、ki 单位=(电气速度 pu)/(圈·dt_pu)。定点默认 kp=0.3、ki=0.01，
+  float 默认 kp=2000、ki=30000（VESC 参考值）。
+- **开环 seed 角度**为 45°（`openloop_seed_angle`，VESC 的 M_PI/4），而非 90°：
+  I/F 拖动退出开环时，观测器磁链 seed 到「开环相位 + 方向×45°」。90° 会导致定点
+  下切闭环后 PLL 锁反、速度环反向振荡（限环）。
+- 漏乘 `1/(2π)` 的典型症状：开环拖动相位斜率偏 ~2π 倍（VF 目标 100rpm 实测 ~630rpm），
+  或 PLL 估速与阈值跨量纲比较导致自动开环永不进入。
+
+> 注：Q15/Q31 无法直接表示 2π（>1），故一律用 `<1` 的 `1/(2π)≈0.1592` 做乘法换算，
+> 绝不写 `×2π` 或把 2π 折进无法表达的系数里。
+
+### 9.3 鲁棒性防护（对齐 VESC）
+
+纯积分器在真实硬件（电流采样噪声、参数失配、负载突变）下易发散，mcl 补了两处
+VESC 已验证的防护：
+
+- **观测器磁链防漂**（`mcl_observer_ortega.c`）：每步更新后算定子磁链幅值
+  `|ψ_s|`，若 `< 0.5·λ` 则按 1.1 倍拉回（`x += 0.1·x`，0.1<1 定点可表达）。
+  对齐 VESC `foc_math.c` 的 `mag < lambda*0.5 → ×1.1`。幅值漂到 0 时 atan2
+  角度噪声极大、极易失步。
+- **PLL speed wind-up 限幅**（`mcl_pll.c`）：失锁时 `speed` 积分会无限累积。
+  float 下用「相位差分（限幅 ±π/3）÷ dt」估计瞬时速度，把 `speed` 限幅到
+  `3×瞬时速度`（对齐 VESC `mcpwm_foc.c`）。定点下 `speed` 由 `MCL_ADD` 自然
+  饱和到 [0,1)，且「圈/dt_pu」与「电气速度 pu」差 2π（不可定点表达），故跳过
+  限幅——饱和已足够防无限增长。
 
 ---
 
