@@ -112,6 +112,7 @@ void pwm_isr(void)
 
 | 文档 | 内容 |
 |---|---|
+| `docs/mcl_user_guide.md` | **使用指南**：集成、HAL、配置、观测器选型、保护、校准、FAQ |
 | `docs/spec/mcl_spec.md` | 规格书：定位、功能需求、API、性能指标 |
 | `docs/spec/mcl_architecture.md` | 代码架构设计：分层、模块 DAG、对象模型 |
 | `docs/spec/mcl_fixed_point.md` | 定点使用说明：归一化、转换宏、切换步骤 |
@@ -119,9 +120,11 @@ void pwm_isr(void)
 
 ## 当前状态
 
-- 控制闭环完整，float 精度通过 PC 仿真验证
-- Q15/Q31 定点：类型/运算宏/数学层骨架就绪，算法层定点迁移为后续工作（代码内 `TODO` 标注）
-- 参考：`reference/bldc/`（VESC 固件）
+- FOC（有感/无感）+ 六步 BLDC 控制闭环完整，观測器（flux/ORTEGA/SMO，SMO 对齐 AN1078）、保护、校准、MTPA/弱磁均已实现
+- 三精度（float/Q15/Q31）均通过 PC 仿真验证（17 组测试 × 三精度，0 失败）
+- SMO 的 Q15 变速相位受 16 位量化限制（稳速可用，变速请用 ORTEGA/Q31），已在源码注释标注
+- 尚未在真实硬件验证，无芯片级 HAL 实现（见 `docs/mcl_user_guide.md` §4）
+- 参考：`reference/bldc/`（VESC 固件）、`reference/lvmc-dspic33ck256mp508-an1078/`（Microchip AN1078 SMO）
 
 ## License
 
