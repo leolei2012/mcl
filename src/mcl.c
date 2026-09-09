@@ -15,7 +15,9 @@
 
 /* ============================ 角度回绕 ============================ */
 
-/* 角度归一到 [0, 整圈)：float 用 2π；定点用 1.0（归一化角） */
+/* 角度归一到 [0, 整圈)：float 用 2π；定点用 1.0（归一化角）。
+   仅当 observer（自动开环）或 openloop（手动开环）任一启用时才需要 */
+#if !defined(MCL_DISABLE_OBSERVER) || !defined(MCL_DISABLE_OPENLOOP)
 static mcl_scalar mcl_wrap_full_turn(mcl_scalar x)
 {
 #if defined(MCL_USE_Q15) || defined(MCL_USE_Q31)
@@ -33,6 +35,7 @@ static mcl_scalar mcl_wrap_full_turn(mcl_scalar x)
     }
     return x;
 }
+#endif
 
 /* ============================ 控制节拍内部实现 ============================ */
 
@@ -49,6 +52,7 @@ static mcl_scalar mcl_wrap_full_turn(mcl_scalar x)
  * 开环阶段写入 self->ol_stage：1=锁定(对齐)，2=拖动，0=未开环；
  * 电流环据此在锁定/拖动阶段分别用 id 对齐 / iq 拖动。
  */
+#ifndef MCL_DISABLE_OBSERVER
 static void mcl_openloop_auto(mcl *self, mcl_scalar *phase, mcl_scalar *speed)
 {
     const mcl_scalar dt = self->dt;
@@ -122,7 +126,7 @@ static void mcl_openloop_auto(mcl *self, mcl_scalar *phase, mcl_scalar *speed)
             if (time_fwd < MCL_ADD(t_lock, t_ramp))
             {
                 ol_rpm = MCL_MUL(ol_rpm_max,
-                                 MCL_SUB(time_fwd, t_lock) / t_ramp);   /* TODO 定点：MCL_DIV */
+                                 MCL_DIV(MCL_SUB(time_fwd, t_lock), t_ramp));
             }
         }
 
@@ -158,6 +162,7 @@ static void mcl_openloop_auto(mcl *self, mcl_scalar *phase, mcl_scalar *speed)
         self->ol_phase = *phase;
     }
 }
+#endif /* MCL_DISABLE_OBSERVER */
 
 static void mcl_control_tick_foc(mcl *self)
 {
@@ -236,6 +241,7 @@ static void mcl_control_tick_foc(mcl *self)
     }
     else /* MCL_MODE_FOC_SENSORLESS */
     {
+#ifndef MCL_DISABLE_OBSERVER
         /* 观测器（用上一周期电压）估相位，PLL 跟踪 + 估速度 */
         mcl_observer_update(&self->observer, self->v_alpha_prev, self->v_beta_prev,
                             i_alpha, i_beta, self->dt, &phase, NULL);
@@ -248,9 +254,11 @@ static void mcl_control_tick_foc(mcl *self)
         {
             mcl_openloop_auto(self, &phase, &speed);
         }
+#endif
     }
 
     /* 开环：相位/速度覆盖（绕过编码器与观测器） */
+#ifndef MCL_DISABLE_OPENLOOP
     if (self->ctrl_mode == MCL_CTRL_OPENLOOP_VF ||
         self->ctrl_mode == MCL_CTRL_OPENLOOP_IF)
     {
@@ -266,6 +274,7 @@ static void mcl_control_tick_foc(mcl *self)
         phase = self->openloop_phase;
         speed = (mcl_scalar)0;
     }
+#endif
 
     self->phase_rad = phase;
     self->speed_rad_s = speed;
@@ -274,6 +283,7 @@ static void mcl_control_tick_foc(mcl *self)
     iq_ref = self->iq_ref;
 
     /* 位置环（最外环）：输出速度参考 rpm */
+#ifndef MCL_DISABLE_POSITION
     if (self->ctrl_mode == MCL_CTRL_POSITION && self->cfg.pos_loop_divider > 0u)
     {
         if ((self->tick_count % (uint32_t)self->cfg.pos_loop_divider) == 0u)
@@ -285,6 +295,7 @@ static void mcl_control_tick_foc(mcl *self)
                                               MCL_MUL(self->dt, (mcl_scalar)self->cfg.pos_loop_divider));
         }
     }
+#endif
 
     /* 速度环：反馈转速 rpm = 电气角速度 rad/s ÷ 极对数 × 60/(2π) */
     if (self->ctrl_mode == MCL_CTRL_SPEED || self->ctrl_mode == MCL_CTRL_POSITION)
@@ -407,36 +418,69 @@ static void mcl_control_tick_foc(mcl *self)
     self->duty_now = da;
 }
 
+#ifndef MCL_DISABLE_BLDC
 static void mcl_control_tick_bldc(mcl *self)
 {
-    mcl_scalar ia;
-    mcl_scalar ib;
-    mcl_scalar ic;
     mcl_scalar da;
     mcl_scalar db;
     mcl_scalar dc;
+    mcl_scalar duty = self->duty_now;
 
-    if (self->hal->adc_read_phase == NULL)
+    if (self->hal == NULL)
     {
         return;
     }
-    (void)self->hal->adc_read_phase(self->hal_ctx, &ia, &ib, &ic);
 
-    /* 简化：六步换相（hall 接口 / BEMF 电压采样待接入），此处按 BEMF 过零 */
-    mcl_bldc_comm_step_bemf(&self->bldc, ia, ib, ic, self->duty_now, &da, &db, &dc);
+    if (self->mode == MCL_MODE_BLDC_HALL)
+    {
+        /* 霍尔有感换相 */
+        if (self->hal->read_hall == NULL)
+        {
+            return;
+        }
+        {
+            uint8_t hall = 0u;
+            if (self->hal->read_hall(self->hal_ctx, &hall) != MCL_OK)
+            {
+                return;
+            }
+            mcl_bldc_comm_step_hall(&self->bldc, hall, duty, &da, &db, &dc);
+        }
+    }
+    else /* MCL_MODE_BLDC_SENSORLESS */
+    {
+        /* 无感 BEMF 换相：读三相端电压 */
+        if (self->hal->adc_read_phase_voltage == NULL)
+        {
+            return;
+        }
+        {
+            mcl_scalar va;
+            mcl_scalar vb;
+            mcl_scalar vc;
+            if (self->hal->adc_read_phase_voltage(self->hal_ctx, &va, &vb, &vc) != MCL_OK)
+            {
+                return;
+            }
+            mcl_bldc_comm_step_bemf(&self->bldc, va, vb, vc, duty, self->dt,
+                                    &da, &db, &dc);
+        }
+    }
 
     if (self->hal->pwm_set_duty != NULL)
     {
         self->hal->pwm_set_duty(self->hal_ctx, da, db, dc);
     }
 }
+#endif /* MCL_DISABLE_BLDC */
 
 /* ============================ 生命周期 ============================ */
 
 void mcl_init(mcl *self, const mcl_config *cfg,
               const mcl_hal_ops *hal, void *hal_ctx,
-              const mcl_observer_ops *obs_ops, void *obs_impl, void *obs_params)
+              const void *obs_ops, void *obs_impl, void *obs_params)
 {
+    (void)obs_ops; (void)obs_impl; (void)obs_params;   /* 裁剪 observer 时未用 */
     if (self == NULL || cfg == NULL || hal == NULL)
     {
         return;
@@ -459,9 +503,13 @@ void mcl_init(mcl *self, const mcl_config *cfg,
     self->ctrl_mode = MCL_CTRL_CURRENT;
 
     mcl_foc_init(&self->foc, cfg);
+#ifndef MCL_DISABLE_BLDC
     mcl_bldc_comm_init(&self->bldc);
-    mcl_observer_init(&self->observer, obs_ops, obs_impl, obs_params);
+#endif
+#ifndef MCL_DISABLE_OBSERVER
+    mcl_observer_init(&self->observer, (const mcl_observer_ops *)obs_ops, obs_impl, obs_params);
     mcl_pll_init(&self->pll, cfg->pll_kp, cfg->pll_ki);
+#endif
     mcl_pid_init(&self->pid_speed, &cfg->speed_pid);
     mcl_pid_init(&self->pid_pos, &cfg->pos_pid);
     mcl_mtpa_fw_init(&self->mtpa_fw, cfg->phase_inductance, cfg->phase_inductance,
@@ -640,6 +688,7 @@ int mcl_set_speed(mcl *self, mcl_scalar speed_rpm)
     return MCL_OK;
 }
 
+#ifndef MCL_DISABLE_POSITION
 int mcl_set_position(mcl *self, mcl_scalar pos_rad)
 {
     if (self == NULL)
@@ -650,6 +699,7 @@ int mcl_set_position(mcl *self, mcl_scalar pos_rad)
     self->pos_ref_rad = pos_rad;
     return MCL_OK;
 }
+#endif
 
 int mcl_set_torque(mcl *self, mcl_scalar torque_nm)
 {
@@ -660,14 +710,17 @@ int mcl_set_torque(mcl *self, mcl_scalar torque_nm)
         return MCL_ERR_PARAM;
     }
 
-    /* iq = T / (1.5 * pole_pairs * lambda)（TODO 定点：除法） */
+    /* iq = T / (1.5 · p · λ)；kt = 1.5·p·λ。
+       定点提示：1.5 与 kt 可能 >1，需转矩 per-unit 归一化（转矩基值 = 1.5·p·λ_BASE·I_BASE） */
     kt = MCL_MUL(MCL_MUL((mcl_scalar)1.5f, (mcl_scalar)self->cfg.pole_pairs), self->cfg.bemf_const);
     self->ctrl_mode = MCL_CTRL_CURRENT;
-    self->iq_ref = torque_nm / kt;
+    self->iq_ref = MCL_DIV(torque_nm, kt);
     return MCL_OK;
 }
 
 /* ============================ 开环指令 ============================ */
+
+#ifndef MCL_DISABLE_OPENLOOP
 
 int mcl_set_openloop_vf(mcl *self, mcl_scalar voltage, mcl_scalar speed_rpm)
 {
@@ -725,6 +778,8 @@ int mcl_set_openloop_align(mcl *self, mcl_scalar current, mcl_scalar phase_rad)
     self->openloop_speed = (mcl_scalar)0;
     return MCL_OK;
 }
+
+#endif /* MCL_DISABLE_OPENLOOP */
 
 /* ============================ 查询 ============================ */
 
@@ -809,7 +864,14 @@ int mcl_get_telemetry(mcl *self, mcl_telemetry *out)
         return MCL_ERR_PARAM;
     }
 
-    out->speed_rpm = self->speed_rad_s;       /* TODO：rad/s → rpm 换算 */
+    /* speed_rad_s 为电气角速度 rad/s（float）或归一化速度（定点）。
+       转速 rpm = 电气 rad/s ÷ pole_pairs × 60/(2π)。定点下归一化电气速度 == 归一化 rpm。 */
+#if defined(MCL_USE_Q15) || defined(MCL_USE_Q31)
+    out->speed_rpm = self->speed_rad_s;   /* 定点：已归一化，数值即归一化 rpm */
+#else
+    out->speed_rpm = MCL_MUL(self->speed_rad_s,
+                             MCL_FROM_FLOAT(MCL_RPM_PER_RAD_S / (float)self->cfg.pole_pairs));
+#endif
     out->position_rad = self->phase_rad;
     out->iq = self->iq_now;
     out->id = self->id_now;
@@ -853,15 +915,19 @@ void mcl_control_tick(mcl *self)
     {
         mcl_control_tick_foc(self);
     }
+#ifndef MCL_DISABLE_BLDC
     else
     {
         mcl_control_tick_bldc(self);
     }
+#endif
 
     self->tick_count++;
 }
 
 /* ============================ 校准封装 ============================ */
+
+#ifndef MCL_DISABLE_CALIBRATION
 
 int mcl_calibrate_offset(mcl *self)
 {
@@ -883,7 +949,7 @@ int mcl_calibrate_align(mcl *self)
     }
 
     ret = mcl_cal_encoder_align(self->hal, self->hal_ctx, &self->cfg,
-                                      self->cfg.rated_current, &offset);
+                                      self->cfg.max_duty, &offset);
     if (ret == MCL_OK)
     {
         self->cfg.feedback.encoder_offset = offset;
@@ -898,7 +964,7 @@ int mcl_calibrate_resistance(mcl *self, mcl_scalar *resistance)
         return MCL_ERR_PARAM;
     }
     return mcl_cal_resistance(self->hal, self->hal_ctx, &self->cfg,
-                                    self->cfg.rated_current, resistance);
+                                    self->cfg.max_duty, resistance);
 }
 
 int mcl_calibrate_inductance(mcl *self, mcl_scalar *inductance)
@@ -910,3 +976,5 @@ int mcl_calibrate_inductance(mcl *self, mcl_scalar *inductance)
     return mcl_cal_inductance(self->hal, self->hal_ctx, &self->cfg,
                                     self->cfg.max_duty, inductance);
 }
+
+#endif /* MCL_DISABLE_CALIBRATION */

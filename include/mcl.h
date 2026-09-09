@@ -21,13 +21,22 @@
 #include "mcl_transform.h"
 #include "mcl_pid.h"
 #include "mcl_svpwm.h"
-#include "mcl_observer.h"
-#include "mcl_pll.h"
 #include "mcl_foc.h"
 #include "mcl_mtpa_fw.h"
-#include "mcl_bldc_comm.h"
 #include "mcl_protection.h"
+
+#ifndef MCL_DISABLE_OBSERVER
+#include "mcl_observer.h"
+#include "mcl_pll.h"
+#endif
+
+#ifndef MCL_DISABLE_BLDC
+#include "mcl_bldc_comm.h"
+#endif
+
+#ifndef MCL_DISABLE_CALIBRATION
 #include "mcl_calibration.h"
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -51,9 +60,13 @@ typedef struct
 
     /* ---- 子模块实例（private） ---- */
     mcl_foc        foc;         /**< FOC 电流环编排 */
+#ifndef MCL_DISABLE_BLDC
     mcl_bldc_comm  bldc;        /**< 六步换相编排 */
+#endif
+#ifndef MCL_DISABLE_OBSERVER
     mcl_observer   observer;    /**< 观测器载体（ops + impl + params） */
     mcl_pll        pll;         /**< PLL */
+#endif
     mcl_pid        pid_speed;   /**< 速度环 */
     mcl_pid        pid_pos;     /**< 位置环 */
     mcl_mtpa_fw    mtpa_fw;     /**< MTPA / 弱磁 */
@@ -95,13 +108,14 @@ typedef struct
  * @param cfg        集中配置（内部会拷贝快照）
  * @param hal        HAL 操作集（宿主实现）
  * @param hal_ctx    HAL 上下文（回调原样传回）
- * @param obs_ops    观测器算法接口（无感模式必需；有感模式可传 NULL）
+ * @param obs_ops    观测器算法接口（无感模式必需；有感模式可传 NULL。
+ *                   类型为 const void* 以便在 MCL_DISABLE_OBSERVER 裁剪时可传任意值）
  * @param obs_impl   观测器实例（实现方分配）
  * @param obs_params 观测器参数（实现方自定义，可为 NULL）
  */
 void mcl_init(mcl *self, const mcl_config *cfg,
               const mcl_hal_ops *hal, void *hal_ctx,
-              const mcl_observer_ops *obs_ops, void *obs_impl, void *obs_params);
+              const void *obs_ops, void *obs_impl, void *obs_params);
 
 /**
  * @brief 反初始化（停转并复位到 IDLE）
@@ -178,7 +192,9 @@ int mcl_set_speed(mcl *self, mcl_scalar speed_rpm);
  * @param pos_rad 位置参考 rad
  * @return MCL_OK / MCL_ERR_PARAM
  */
+#ifndef MCL_DISABLE_POSITION
 int mcl_set_position(mcl *self, mcl_scalar pos_rad);
+#endif
 
 /**
  * @brief 转矩指令（经 MTPA 换算为 d/q 电流参考）
@@ -200,6 +216,7 @@ int mcl_set_torque(mcl *self, mcl_scalar torque_nm);
  * @param speed_rpm 目标机械转速 rpm（相位斜坡斜率）
  * @return MCL_OK / MCL_ERR_PARAM
  */
+#ifndef MCL_DISABLE_OPENLOOP
 int mcl_set_openloop_vf(mcl *self, mcl_scalar voltage, mcl_scalar speed_rpm);
 
 /**
@@ -227,6 +244,7 @@ int mcl_set_openloop_if(mcl *self, mcl_scalar current, mcl_scalar speed_rpm);
  * @return MCL_OK / MCL_ERR_PARAM
  */
 int mcl_set_openloop_align(mcl *self, mcl_scalar current, mcl_scalar phase_rad);
+#endif /* MCL_DISABLE_OPENLOOP */
 
 /* ============================ 查询 ============================ */
 
@@ -295,6 +313,8 @@ void mcl_control_tick(mcl *self);
 
 /* ============================ 校准（阻塞式，电机停转时调用） ============================ */
 
+#ifndef MCL_DISABLE_CALIBRATION
+
 /**
  * @brief 电流零漂校准
  * @param self 电机对象
@@ -324,6 +344,8 @@ int mcl_calibrate_resistance(mcl *self, mcl_scalar *resistance);
  * @return MCL_OK / MCL_ERR_HAL
  */
 int mcl_calibrate_inductance(mcl *self, mcl_scalar *inductance);
+
+#endif /* MCL_DISABLE_CALIBRATION */
 
 #ifdef __cplusplus
 }

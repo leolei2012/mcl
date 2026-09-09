@@ -21,6 +21,23 @@ extern "C" {
 #define MCL_VERSION_STRING   "0.1.0"
 #define MCL_VERSION_NUM      ((MCL_VERSION_MAJOR << 16) | (MCL_VERSION_MINOR << 8) | MCL_VERSION_PATCH)
 
+/* ============================ 功能裁剪（编译期，默认全开） ============================ */
+
+/**
+ * mcl 支持按功能裁剪，用编译参数定义下列宏即可去掉不需要的模块，
+ * 节省 Flash / RAM 并避免编译无用代码。不定义任何宏 = 全功能（向后兼容）。
+ *
+ *   #define MCL_DISABLE_BLDC          裁掉六步方波换相（含 mcl_bldc_comm 与相关 mode）
+ *   #define MCL_DISABLE_OBSERVER      裁掉无感观测器（无感 FOC 不可用）
+ *   #define MCL_DISABLE_POSITION      裁掉位置环
+ *   #define MCL_DISABLE_CALIBRATION   裁掉校准（编码器对齐/电阻/电感/相序/磁链测量）
+ *   #define MCL_DISABLE_OPENLOOP      裁掉开环（VF/IF/ALIGN + 自动开环切闭环）
+ *
+ * 裁剪后：对应子模块结构体成员、public API、实现代码一并移除；
+ * 若宿主仍调用被裁的 API（如 mcl_set_mode(BLDC)），编译期报错提醒。
+ * 示例：gcc -DMCL_DISABLE_BLDC ...（不需要六步换相时）
+ */
+
 /* ============================ 标量类型与精度 ============================ */
 
 /**

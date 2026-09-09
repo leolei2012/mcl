@@ -15,6 +15,8 @@
 #include "mcl_observer_ortega.h"
 #include "mcl_math.h"
 
+#ifndef MCL_DISABLE_OBSERVER
+
 static void ortega_reset(void *impl);
 
 static void ortega_init(void *impl, const void *params)
@@ -133,3 +135,5 @@ const mcl_observer_ops mcl_observer_ortega_ops = {
     .seed = ortega_seed,
     .get_confidence = NULL
 };
+
+#endif /* MCL_DISABLE_OBSERVER */

@@ -72,6 +72,24 @@ typedef struct
     int (*enc_read_speed)(void *ctx, mcl_scalar *speed_rad_s);
 
     /**
+     * @brief 读取霍尔传感器状态（六步 BLDC 换相用）
+     * @param ctx  HAL 上下文
+     * @param hall 霍尔状态（输出，bit0/1/2 对应 H1/H2/H3，未实现可返回 MCL_ERR_HAL）
+     * @return MCL_OK / MCL_ERR_HAL
+     */
+    int (*read_hall)(void *ctx, uint8_t *hall);
+
+    /**
+     * @brief 读取三相端电压（六步 BLDC 无感 BEMF 换相用）
+     * @param ctx HAL 上下文
+     * @param va  A 相端电压 V（输出）
+     * @param vb  B 相端电压 V（输出）
+     * @param vc  C 相端电压 V（输出）
+     * @return MCL_OK / MCL_ERR_HAL（无此采样能力可返回错误）
+     */
+    int (*adc_read_phase_voltage)(void *ctx, mcl_scalar *va, mcl_scalar *vb, mcl_scalar *vc);
+
+    /**
      * @brief 微秒时间基准
      * @param ctx HAL 上下文
      * @return 自启动以来的微秒数

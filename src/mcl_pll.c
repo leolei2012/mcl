@@ -9,6 +9,8 @@
 #include "mcl_pll.h"
 #include "mcl_math.h"
 
+#ifndef MCL_DISABLE_OBSERVER
+
 /* 半圈 / 全圈常量（float：π / 2π；定点：0.5 / 1.0） */
 #if defined(MCL_USE_Q15)
     #define MCL_PLL_HALF_TURN ((mcl_scalar)16384)
@@ -88,3 +90,5 @@ void mcl_pll_run(mcl_pll *self, mcl_scalar phase, mcl_scalar dt,
         *speed_out = self->speed;
     }
 }
+
+#endif /* MCL_DISABLE_OBSERVER */

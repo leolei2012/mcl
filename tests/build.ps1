@@ -48,6 +48,22 @@ if ($LASTEXITCODE -ne 0) { Write-Error "编译失败 (fps_q31)"; exit 1 }
 gcc -std=c99 -Iinclude -Wall -Wextra tests\smo_closed_loop_test.c $srcs -lm -o tests\smo_cl.exe
 if ($LASTEXITCODE -ne 0) { Write-Error "编译失败 (smo_cl)"; exit 1 }
 
+# 校准流程仿真（R/L 测量，float）
+gcc -std=c99 -Iinclude -Wall -Wextra tests\calibration_test.c $srcs -lm -o tests\cal.exe
+if ($LASTEXITCODE -ne 0) { Write-Error "编译失败 (cal)"; exit 1 }
+
+# MTPA / 弱磁单元测试（三种精度）
+gcc -std=c99 -Iinclude -Wall -Wextra tests\mtpa_fw_test.c $srcs -lm -o tests\mtpa_float.exe
+if ($LASTEXITCODE -ne 0) { Write-Error "编译失败 (mtpa_float)"; exit 1 }
+gcc -std=c99 -Iinclude -DMCL_USE_Q15 -Wall -Wextra tests\mtpa_fw_test.c $srcs -lm -o tests\mtpa_q15.exe
+if ($LASTEXITCODE -ne 0) { Write-Error "编译失败 (mtpa_q15)"; exit 1 }
+gcc -std=c99 -Iinclude -DMCL_USE_Q31 -Wall -Wextra tests\mtpa_fw_test.c $srcs -lm -o tests\mtpa_q31.exe
+if ($LASTEXITCODE -ne 0) { Write-Error "编译失败 (mtpa_q31)"; exit 1 }
+
+# BLDC 六步换相单元测试
+gcc -std=c99 -Iinclude -Wall -Wextra tests\bldc_test.c $srcs -lm -o tests\bldc.exe
+if ($LASTEXITCODE -ne 0) { Write-Error "编译失败 (bldc)"; exit 1 }
+
 Write-Host "构建成功，运行测试..."
 & tests\sim_test.exe
 Write-Host ""
@@ -84,3 +100,16 @@ Write-Host ""
 Write-Host ""
 Write-Host "===== SMO 无感速度环闭环（float，相位补偿）====="
 & tests\smo_cl.exe
+Write-Host ""
+Write-Host "===== 校准流程仿真（R/L 测量）====="
+& tests\cal.exe
+Write-Host ""
+Write-Host "===== MTPA/弱磁单元测试 ====="
+& tests\mtpa_float.exe
+Write-Host ""
+& tests\mtpa_q15.exe
+Write-Host ""
+& tests\mtpa_q31.exe
+Write-Host ""
+Write-Host "===== BLDC 六步换相单元测试 ====="
+& tests\bldc.exe

@@ -22,6 +22,8 @@
 #include "mcl_observer_smo.h"
 #include "mcl_math.h"
 
+#ifndef MCL_DISABLE_OBSERVER
+
 static void smo_reset(void *impl);
 
 static void smo_init(void *impl, const void *params)
@@ -97,7 +99,7 @@ static void smo_update(void *impl, mcl_scalar v_alpha, mcl_scalar v_beta,
     z_a = MCL_MUL(self->params.gain, smo_sat(err_a, self->params.boundary));
     z_b = MCL_MUL(self->params.gain, smo_sat(err_b, self->params.boundary));
 
-    /* 电流观测：i_hat += (v - R·i_hat + z) · dt / L（TODO 定点：除法） */
+    /* 电流观测：i_hat += (v - R·i_hat + z) · (dt/L) */
     dt_over_l = MCL_DIV(dt, self->params.inductance);
     self->i_alpha_hat = MCL_ADD(self->i_alpha_hat,
                                 MCL_MUL(MCL_ADD(MCL_SUB(v_alpha,
@@ -156,3 +158,5 @@ const mcl_observer_ops mcl_observer_smo_ops = {
     .seed = smo_seed,
     .get_confidence = NULL
 };
+
+#endif /* MCL_DISABLE_OBSERVER */

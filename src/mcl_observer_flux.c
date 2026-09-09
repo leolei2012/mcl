@@ -14,6 +14,8 @@
 #include "mcl_observer_flux.h"
 #include "mcl_math.h"
 
+#ifndef MCL_DISABLE_OBSERVER
+
 static void flux_reset(void *impl);
 
 static void flux_init(void *impl, const void *params)
@@ -75,8 +77,7 @@ static void flux_update(void *impl, mcl_scalar v_alpha, mcl_scalar v_beta,
                                               MCL_MUL(lambda_beta, lambda_beta)));
 
     /* 幅值误差反馈校正（ORTEGA 式）：沿磁链方向把幅值拉向标称 λ，
-       消除纯积分直流漂移（gain 越大收敛越快；gain=0 关闭）
-       TODO 定点：除法需 MCL_DIV */
+       消除纯积分直流漂移（gain 越大收敛越快；gain=0 关闭） */
     if (self->params.gain > (mcl_scalar)0 && self->lambda_est > (mcl_scalar)0)
     {
         mcl_scalar err = MCL_SUB(self->lambda_est, self->params.lambda);
@@ -122,3 +123,5 @@ const mcl_observer_ops mcl_observer_flux_ops = {
     .seed = flux_seed,
     .get_confidence = NULL
 };
+
+#endif /* MCL_DISABLE_OBSERVER */

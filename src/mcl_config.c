@@ -19,6 +19,7 @@ void mcl_config_default(mcl_config *cfg)
     cfg->pole_pairs = 4;
     cfg->phase_resistance = MCL_FROM_FLOAT(1.0f);
     cfg->phase_inductance = MCL_FROM_FLOAT(0.001f);
+    cfg->ld_lq_diff = (mcl_scalar)0;   /* SPMSM：Ld=Lq */
     cfg->bemf_const = MCL_FROM_FLOAT(0.02f);
     cfg->rated_current = MCL_FROM_FLOAT(5.0f);
     cfg->rated_speed_rpm = MCL_FROM_FLOAT(3000.0f);

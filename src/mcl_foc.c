@@ -18,9 +18,9 @@ void mcl_foc_init(mcl_foc *self, const mcl_config *cfg)
     mcl_pid_init(&self->pid_d, &cfg->current_pid);
     mcl_pid_init(&self->pid_q, &cfg->current_pid);
 
-    /* 简化：以单一相电感近似 Ld≈Lq（SPMSM）；IPMSM 需分开配置 */
+    /* Lq = 相电感；Ld = Lq - ld_lq_diff（SPMSM diff=0 → Ld=Lq；IPMSM diff>0 → Ld<Lq） */
     mcl_mtpa_fw_init(&self->mtpa_fw,
-                     cfg->phase_inductance,   /* ld */
+                     MCL_SUB(cfg->phase_inductance, cfg->ld_lq_diff),   /* ld */
                      cfg->phase_inductance,   /* lq */
                      cfg->bemf_const,         /* lambda（V/(rad/s) = Wb） */
                      cfg->rated_current);     /* i_max */

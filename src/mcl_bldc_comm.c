@@ -5,6 +5,8 @@
 
 #include "mcl_bldc_comm.h"
 
+#ifndef MCL_DISABLE_BLDC
+
 /* 常量：1/3 与 BEMF 过零阈值 */
 #if defined(MCL_USE_Q15)
     #define MCL_ONE_THIRD           ((mcl_scalar)10923)
@@ -48,6 +50,8 @@ void mcl_bldc_comm_init(mcl_bldc_comm *self)
 
     self->step = 0;
     self->invert = false;
+    self->bemf_integrator = (mcl_scalar)0;
+    self->bemf_threshold = MCL_BEMF_ZC_THRESHOLD;
 
     /* 默认 120° 霍尔映射（H1 H2 H3），实际应由校准（hall_detect）确定 */
     self->hall_map[0] = 0;
@@ -81,7 +85,7 @@ void mcl_bldc_comm_step_hall(mcl_bldc_comm *self, uint8_t hall, mcl_scalar duty,
 }
 
 void mcl_bldc_comm_step_bemf(mcl_bldc_comm *self, mcl_scalar bemf_a, mcl_scalar bemf_b,
-                             mcl_scalar bemf_c, mcl_scalar duty,
+                             mcl_scalar bemf_c, mcl_scalar duty, mcl_scalar dt,
                              mcl_scalar *da, mcl_scalar *db, mcl_scalar *dc)
 {
     mcl_scalar neutral;
@@ -113,11 +117,20 @@ void mcl_bldc_comm_step_bemf(mcl_bldc_comm *self, mcl_scalar bemf_a, mcl_scalar 
     default: float_bemf = MCL_SUB(bemf_c, neutral); break;
     }
 
-    /* 悬空相 BEMF 过零（阈值）→ 换相（TODO：30° 延迟 + 滤波完整状态机） */
-    if (MCL_ABS(float_bemf) < MCL_BEMF_ZC_THRESHOLD)
+    /* BEMF 积分法换相（参考 VESC COMM_MODE_INTEGRATE）：
+       仅当悬空相 BEMF > 0 时积分（过零后积分，等价过零后 30° 延迟），
+       积分到阈值 → 换相并清零积分器 */
+    if (float_bemf > (mcl_scalar)0)
     {
-        self->step = (uint8_t)((self->step + 1u) % 6u);
+        self->bemf_integrator = MCL_ADD(self->bemf_integrator, MCL_MUL(float_bemf, dt));
+        if (self->bemf_integrator > self->bemf_threshold)
+        {
+            self->step = (uint8_t)((self->step + 1u) % 6u);
+            self->bemf_integrator = (mcl_scalar)0;
+        }
     }
 
     bldc_apply(self->step, duty, da, db, dc);
 }
+
+#endif /* MCL_DISABLE_BLDC */

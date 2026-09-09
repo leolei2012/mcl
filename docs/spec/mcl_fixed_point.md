@@ -196,6 +196,7 @@ float speed_rpm = MCL_TO_FLOAT(t.speed_rpm);   /* 若 speed 归一化则再乘�
 | 观测器（flux/SMO/ORTEGA） | ✅ | ✅（per-unit 归一化，三精度相位误差与 float 同量级；flux ~4°、SMO ~4°、ORTEGA ~1°） |
 | FOC 电流环闭环 | ✅ | ✅（per-unit 三精度一致精确收敛，Q31 无偏） |
 | FOC 速度环闭环 + 机械方程 | ✅ | ✅（电机 float 物理 + HAL 边界归一化，三精度 ~500 rpm <1% 误差） |
+| MTPA / 弱磁 | ✅ | ✅（float 中转，避开 8/4/√3 常数溢出，三精度一致；IPMSM 支持） |
 | dt 归一化 | — | ✅（`cfg.time_base`，dt_pu = dt/T_BASE） |
 | 速度环 rpm↔rad/s 换算 | ✅ | ⚠️ 归一化路径（`#if` 分离，speed/speed_ref 在边界归一化） |
 | 时间阈值（stall_time 等）归一化 | — | ⚠️ 需随 time_base 归一化（见 §7 坑） |
@@ -249,3 +250,4 @@ dt 归一化后（`dt_pu = dt/T_BASE`，典型 dt_pu≈0.01 而非 0.0001），
 | v0.3.0 | 2026-09-06 | 定点速度环闭环 + 机械方程验证通过（三精度 ~500 rpm），电机模型 float 物理 + HAL 边界归一化方案 |
 | v0.3.1 | 2026-09-06 | SMO 完善：反电动势低通相位补偿 + seed 接口 + flux 参数 + sign/sat 定点修复；开环误差 7.4°→1.8° |
 | v0.3.2 | 2026-09-06 | flux/SMO 定点 per-unit 验证补全（三观测器三精度一致，误差与 float 同量级） |
+| v0.4.0 | 2026-09-06 | MTPA/弱磁定点化 + IPMSM 支持（config 加 ld_lq_diff，float 中转算 8/4/√3，三精度一致）；修 torque/telemetry/保护降额/开环斜坡 4 处裸除法 |

@@ -105,6 +105,6 @@ mcl_scalar mcl_protection_derate(mcl_protection *self, mcl_scalar temp)
         return (mcl_scalar)0;
     }
 
-    /* 线性降额：(overtemp - temp) / (overtemp - temp_start)（TODO 定点：除法） */
-    return MCL_SUB(self->limits.overtemp, temp) / range;
+    /* 线性降额：(overtemp - temp) / (overtemp - temp_start)，结果 ∈ [0,1] */
+    return MCL_DIV(MCL_SUB(self->limits.overtemp, temp), range);
 }

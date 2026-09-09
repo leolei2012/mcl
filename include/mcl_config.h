@@ -35,7 +35,8 @@ typedef struct
     /* ---- 电机参数 ---- */
     uint8_t    pole_pairs;       /**< 极对数 */
     mcl_scalar phase_resistance; /**< 相电阻 Ω */
-    mcl_scalar phase_inductance; /**< 相电感 H */
+    mcl_scalar phase_inductance; /**< q 轴电感 Lq（= 平均相电感）H */
+    mcl_scalar ld_lq_diff;       /**< 凸极差 Lq - Ld（≥0，SPMSM=0；IPMSM 用，MTPA 依据） */
     mcl_scalar bemf_const;       /**< 反电动势常数（= 磁链 λ）V/(rad/s) */
     mcl_scalar rated_current;    /**< 额定电流 A */
     mcl_scalar rated_speed_rpm;  /**< 额定转速 rpm */

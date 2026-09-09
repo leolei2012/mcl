@@ -5,6 +5,8 @@
 
 #include "mcl_observer.h"
 
+#ifndef MCL_DISABLE_OBSERVER
+
 void mcl_observer_init(mcl_observer *self, const mcl_observer_ops *ops,
                        void *impl, void *params)
 {
@@ -66,3 +68,5 @@ void mcl_observer_seed(mcl_observer *self, mcl_scalar flux_alpha, mcl_scalar flu
 
     self->ops->seed(self->impl, flux_alpha, flux_beta);
 }
+
+#endif /* MCL_DISABLE_OBSERVER */
