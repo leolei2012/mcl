@@ -212,8 +212,17 @@ static void mcl_control_tick_foc(mcl *self)
     mcl_fault fault;
 
     /* 1. 采样（减零漂） */
-    if (self->hal->adc_read_phase != NULL &&
-        self->hal->adc_read_phase(self->hal_ctx, &ia, &ib, &ic) != MCL_OK)
+    if (self->hal->adc_read_phase == NULL)
+    {
+        /* 无电流采样能力：无法运行 FOC 电流环（ia/ib/ic 未定义会导致 UB），
+           关断 PWM 安全停机，不进控制环。 */
+        if (self->hal->pwm_set_duty != NULL)
+        {
+            self->hal->pwm_set_duty(self->hal_ctx, (mcl_scalar)0, (mcl_scalar)0, (mcl_scalar)0);
+        }
+        return;
+    }
+    if (self->hal->adc_read_phase(self->hal_ctx, &ia, &ib, &ic) != MCL_OK)
     {
         /* ADC 采样失败：关断 PWM 安全停机，不伪造故障码。
            具体故障原因由宿主在 HAL 出错时自行 mcl_fault_assert 上报（如 MCL_FAULT_DRV）。 */
