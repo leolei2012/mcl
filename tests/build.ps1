@@ -92,6 +92,14 @@ if ($LASTEXITCODE -ne 0) { Write-Error "编译失败 (ol_q31)"; exit 1 }
 gcc -std=c99 -Iinclude -Wall -Wextra tests\fault_recovery_test.c $srcs -lm -o tests\fault_rec.exe
 if ($LASTEXITCODE -ne 0) { Write-Error "编译失败 (fault_rec)"; exit 1 }
 
+# mcl_config_default 定点回归 + mcl_init 错误码（三种精度）
+gcc -std=c99 -Iinclude -Wall -Wextra tests\config_default_fp_test.c $srcs -lm -o tests\cfgdef_float.exe
+if ($LASTEXITCODE -ne 0) { Write-Error "编译失败 (cfgdef_float)"; exit 1 }
+gcc -std=c99 -Iinclude -DMCL_USE_Q15 -Wall -Wextra tests\config_default_fp_test.c $srcs -lm -o tests\cfgdef_q15.exe
+if ($LASTEXITCODE -ne 0) { Write-Error "编译失败 (cfgdef_q15)"; exit 1 }
+gcc -std=c99 -Iinclude -DMCL_USE_Q31 -Wall -Wextra tests\config_default_fp_test.c $srcs -lm -o tests\cfgdef_q31.exe
+if ($LASTEXITCODE -ne 0) { Write-Error "编译失败 (cfgdef_q31)"; exit 1 }
+
 # 有感位置环闭环（三种精度）
 gcc -std=c99 -Iinclude -Wall -Wextra tests\fixed_point_position_test.c $srcs -lm -o tests\fppos_float.exe
 if ($LASTEXITCODE -ne 0) { Write-Error "编译失败 (fppos_float)"; exit 1 }
@@ -181,6 +189,13 @@ Write-Host ""
 Write-Host ""
 Write-Host "===== 故障恢复时序 + 现场快照 ====="
 & tests\fault_rec.exe
+Write-Host ""
+Write-Host "===== mcl_config_default 定点回归 + mcl_init 错误码 ====="
+& tests\cfgdef_float.exe
+Write-Host ""
+& tests\cfgdef_q15.exe
+Write-Host ""
+& tests\cfgdef_q31.exe
 Write-Host ""
 Write-Host "===== 有感位置环闭环（三精度）====="
 & tests\fppos_float.exe

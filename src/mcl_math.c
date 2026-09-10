@@ -166,39 +166,65 @@ static void mcl_q_table_init(void)
 }
 
 /* 归一化角度 x ∈ [0,1) → sin(x·2π)。
-   x 是归一化角度（1.0 = 2π）。索引用 float 算（int↔float 廉价），
-   表值与插值用 Q 格式定点（避免 sinf 开销）。 */
+   x 是归一化角度（1.0 = 2π）。
+   纯整数实现：不转 float、不调 MCL_TO_FLOAT/MCL_FROM_FLOAT。索引与插值分数
+   由折叠后的 90° 区间（0.25 圈 = 256 项表）纯移位得到：
+   Q31 取 >>21 当表索引、低 21 位 <<10 当插值分数；
+   Q15 取 >>5 当表索引、低 5 位 <<10 当插值分数。
+   配 mcl_q_sin_table 做 Q 格式整数乘加插值（MCL_MUL 已内置半加舍入 + int64 防溢出）。 */
 static mcl_scalar mcl_q_sin(mcl_scalar x)
 {
-    float fx = MCL_TO_FLOAT(x);
-    float sign = 1.0f;
-    int idx;
-    float frac;
+    mcl_scalar sign = (mcl_scalar)1;
     mcl_scalar v0, v1;
 
-    /* wrap 到 [0,1) */
-    while (fx >= 1.0f) { fx -= 1.0f; }
-    while (fx < 0.0f) { fx += 1.0f; }
+#if defined(MCL_USE_Q31)
+    /* Q31：1.0 = 0x7FFFFFFF。象限折叠用 0x2000…（0.25）、0x4000…（0.5）、0x6000…（0.75）。
+       归一化角度本就在 [0,1)，负值用 int32 取模溢出即可 wrap（见下方 mask）。 */
+    int32_t u = (int32_t)x;
+    int32_t idx;
+
+    /* wrap 到 [0,1)：负值取低 31 位即回卷，正值本就在界内（abs < 2^31）。 */
+    u &= 0x7FFFFFFF;
 
     /* 折叠到 [0, 0.25)（1/4 圈 = 90°） */
-    if (fx >= 0.5f) { fx -= 0.5f; sign = -sign; }
-    if (fx >= 0.25f) { fx = 0.5f - fx; }
+    if ((uint32_t)u >= 0x40000000u) { u -= 0x40000000; sign = -sign; }   /* 下半圈：符号翻转 */
+    if ((uint32_t)u >= 0x20000000u) { u = 0x40000000 - u; }              /* 折 90°~180° 回 90° */
 
-    /* 索引：fx ∈ [0, 0.25] → idx ∈ [0, 256] */
-    fx = fx * 4.0f * (float)MCL_MATH_TABLE_SIZE;
-    idx = (int)fx;
+    idx = (int32_t)((uint32_t)u >> 21);                    /* 索引 = u×1024/2^31：0.25圈 → 256项表 → /1024，故 >>(31-10)=21 */
     if (idx >= MCL_MATH_TABLE_SIZE) { idx = MCL_MATH_TABLE_SIZE - 1; }
-    frac = fx - (float)idx;
 
     v0 = mcl_q_sin_table[idx];
     v1 = mcl_q_sin_table[idx + 1];
-
-    /* 线性插值（Q 格式 + 定点运算） */
+    /* 插值分数 frac = (u 的低 21 位) / 2^21 ∈ [0,1)。Q31 分数 = 低21位 << 10。 */
     {
-        mcl_scalar f = MCL_FROM_FLOAT(frac);
+        int32_t f = (int32_t)(((uint32_t)u & 0x001FFFFFu) << 10);   /* Q31 分数 */
         mcl_scalar r = MCL_ADD(v0, MCL_MUL(MCL_SUB(v1, v0), f));
-        return (sign < 0.0f) ? MCL_NEG(r) : r;
+        mcl_scalar neg = (sign < (mcl_scalar)0) ? MCL_NEG(r) : r;
+        return neg;
     }
+
+#elif defined(MCL_USE_Q15)
+    /* Q15：1.0 = 0x7FFF。象限折叠用 0x2000（0.25）、0x4000（0.5）、0x6000（0.75）。 */
+    int16_t u = (int16_t)x;
+    int16_t idx;
+
+    u &= 0x7FFF;   /* wrap：负值取低 15 位回卷 */
+
+    if ((uint16_t)u >= 0x4000u) { u = (int16_t)(u - 0x4000); sign = (mcl_scalar)(-1); }
+    if ((uint16_t)u >= 0x2000u) { u = (int16_t)(0x4000 - u); }
+
+    idx = (int16_t)((uint16_t)u >> 5);                    /* 索引 = u×1024/2^15：0.25圈 → 256项表，故 >>(15-10)=5 */
+    if (idx >= MCL_MATH_TABLE_SIZE) { idx = MCL_MATH_TABLE_SIZE - 1; }
+
+    v0 = mcl_q_sin_table[idx];
+    v1 = mcl_q_sin_table[idx + 1];
+    {
+        int16_t f = (int16_t)(((uint16_t)u & 0x001Fu) << 10);   /* Q15 分数 = 低5位 << 10 */
+        mcl_scalar r = MCL_ADD(v0, MCL_MUL(MCL_SUB(v1, v0), f));
+        mcl_scalar neg = (sign < (mcl_scalar)0) ? MCL_NEG(r) : r;
+        return neg;
+    }
+#endif
 }
 
 mcl_scalar mcl_math_sin(mcl_scalar x)
@@ -211,22 +237,23 @@ mcl_scalar mcl_math_cos(mcl_scalar x)
 {
     if (!mcl_q_table_ready) { mcl_q_table_init(); }
     /* cos(x) = sin(x + 0.25)（归一化角度 +90°）。
-       用 float 域偏移并 wrap，避免 Q 格式 MCL_ADD 在 x>0.75 时饱和。 */
-    {
-        float fx = MCL_TO_FLOAT(x) + 0.25f;
-        while (fx >= 1.0f) { fx -= 1.0f; }
-        return mcl_q_sin(MCL_FROM_FLOAT(fx));
-    }
+       纯整数 +90°：Q31/Q15 加 0.25（= 0x20000000 / 0x2000），负数不回卷由 mcl_q_sin 内部 mask 处理。 */
+#if defined(MCL_USE_Q31)
+    return mcl_q_sin((mcl_scalar)((int32_t)x + 0x20000000));
+#elif defined(MCL_USE_Q15)
+    return mcl_q_sin((mcl_scalar)((int16_t)x + 0x2000));
+#endif
 }
 
 void mcl_math_sincos(mcl_scalar x, mcl_scalar *sin, mcl_scalar *cos)
 {
-    float fx;
     if (!mcl_q_table_ready) { mcl_q_table_init(); }
     *sin = mcl_q_sin(x);
-    fx = MCL_TO_FLOAT(x) + 0.25f;
-    while (fx >= 1.0f) { fx -= 1.0f; }
-    *cos = mcl_q_sin(MCL_FROM_FLOAT(fx));
+#if defined(MCL_USE_Q31)
+    *cos = mcl_q_sin((mcl_scalar)((int32_t)x + 0x20000000));
+#elif defined(MCL_USE_Q15)
+    *cos = mcl_q_sin((mcl_scalar)((int16_t)x + 0x2000));
+#endif
 }
 
 mcl_scalar mcl_math_atan2(mcl_scalar y, mcl_scalar x)

@@ -502,22 +502,26 @@ static void mcl_control_tick_bldc(mcl *self)
 
 /* ============================ 生命周期 ============================ */
 
-void mcl_init(mcl *self, const mcl_config *cfg,
-              const mcl_hal_ops *hal, void *hal_ctx,
-              const void *obs_ops, void *obs_impl, void *obs_params)
+int mcl_init(mcl *self, const mcl_config *cfg,
+             const mcl_hal_ops *hal, void *hal_ctx,
+             const void *obs_ops, void *obs_impl, void *obs_params)
 {
     (void)obs_ops; (void)obs_impl; (void)obs_params;   /* 裁剪 observer 时未用 */
     if (self == NULL || cfg == NULL || hal == NULL)
     {
-        return;
+        return MCL_ERR_PARAM;
     }
 
-    /* 配置校验：非法参数直接拒绝初始化，不进 FAULT（参数错误 ≠ 运行时故障） */
+    /* 配置校验：非法参数直接拒绝初始化，不进 FAULT（参数错误 ≠ 运行时故障）。
+       校验失败必须显式返回错误码，并把 hal 置空，避免 mcl_start 把 state 置 RUN
+       后 mcl_control_tick 因 hal==NULL 每拍静默 return（tick 不增、duty 不更新）。 */
     if (mcl_config_validate(cfg) != MCL_OK)
     {
+        self->hal = NULL;
+        self->hal_ctx = NULL;
         self->state = MCL_STATE_IDLE;
         self->fault = MCL_FAULT_NONE;
-        return;
+        return MCL_ERR_PARAM;
     }
 
     self->cfg = *cfg;
@@ -574,6 +578,8 @@ void mcl_init(mcl *self, const mcl_config *cfg,
     /* dt = 1/电流环频率 ÷ time_base 归一化（per-unit 时间 dt_pu = dt/T_BASE = dt·W_BASE）。
        time_base 默认 1.0 时保持物理秒；定点设 T_BASE（<1）消除 dt 的 Q15 量化误差。 */
     self->dt = MCL_DIV(MCL_FROM_FLOAT(1.0f / (float)cfg->current_loop_freq_hz), cfg->time_base);
+
+    return MCL_OK;
 }
 
 void mcl_deinit(mcl *self)

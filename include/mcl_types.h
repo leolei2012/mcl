@@ -6,6 +6,7 @@
 #ifndef MCL_TYPES_H
 #define MCL_TYPES_H
 
+#include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -135,10 +136,13 @@ static inline int32_t mcl_q31_sat(int64_t x)
 
 static inline int32_t mcl_q31_from_float(float x)
 {
-    double v = (double)x * 2147483648.0;
-    if (v > 2147483647.0) { v = 2147483647.0; }
-    if (v < -2147483648.0) { v = -2147483648.0; }
-    return (int32_t)v;
+    /* 截断（truncate）即可，无需 round-to-nearest：Q31 的 1 LSB ≈ 4.7e-10，
+       远小于 12-bit 电流 ADC 分辨率（≈2.4e-4）。用 float 直接乘 2^31 后截断，
+       避免 double 中间量在无 FPU 的 M0/M0+ 上触发 64-bit 软浮点开销。 */
+    float v = x * 2147483648.0f;
+    if (v > 2147483520.0f) { return 2147483647; }            /* 饱和上界（float 可表示的最大安全值） */
+    if (v < -2147483648.0f) { return -2147483648; }          /* 饱和下界 */
+    return (int32_t)v;                                         /* C 语义：向零截断 */
 }
 
 static inline float mcl_q31_to_float(int32_t x)

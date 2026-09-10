@@ -112,10 +112,14 @@ typedef struct
  *                   类型为 const void* 以便在 MCL_DISABLE_OBSERVER 裁剪时可传任意值）
  * @param obs_impl   观测器实例（实现方分配）
  * @param obs_params 观测器参数（实现方自定义，可为 NULL）
+ * @return MCL_OK / MCL_ERR_PARAM（self/cfg/hal 为空，或配置校验失败）
+ *
+ * 注意：校验失败时 self->hal 会被置 NULL、state 置 IDLE，调用方必须检查返回值，
+ * 不能忽略后继续 mcl_start()。
  */
-void mcl_init(mcl *self, const mcl_config *cfg,
-              const mcl_hal_ops *hal, void *hal_ctx,
-              const void *obs_ops, void *obs_impl, void *obs_params);
+int mcl_init(mcl *self, const mcl_config *cfg,
+             const mcl_hal_ops *hal, void *hal_ctx,
+             const void *obs_ops, void *obs_impl, void *obs_params);
 
 /**
  * @brief 反初始化（停转并复位到 IDLE）
